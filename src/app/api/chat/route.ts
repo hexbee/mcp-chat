@@ -7,6 +7,7 @@ interface ChatRequest {
   mcpState?: {
     connected: boolean;
     connectedServers: string[];
+    mcpConfig?: string;
   };
 }
 
@@ -23,17 +24,40 @@ export async function POST(request: Request) {
 
     // 如果有MCP状态信息并且显示已连接，则确保服务器端也已连接
     if (mcpState?.connected && mcpState.connectedServers?.length > 0) {
+      // 如果有MCP配置，先设置配置
+      if (mcpState.mcpConfig) {
+        try {
+          mcpManager.setConfig(JSON.parse(mcpState.mcpConfig));
+        } catch (configError) {
+          console.error('解析MCP配置失败:', configError);
+        }
+      }
+      
       const connectedServers = mcpManager.getConnectedServers();
+      // 找出前端显示已连接，但服务端未连接的服务器
       const shouldConnect = mcpState.connectedServers.filter(server => 
         !connectedServers.includes(server)
       );
-      
-      if (shouldConnect.length > 0) {
-        console.log(`客户端显示已连接的MCP服务器 ${shouldConnect.join(', ')} 在服务端未连接，正在重新连接...`);
+      // 找出服务端已连接，但前端未显示的服务器
+      const shouldDisconnect = connectedServers.filter(server =>
+        !mcpState.connectedServers.includes(server)
+      );
+      // 只处理需要同步的服务器
+      if (shouldConnect.length > 0 || shouldDisconnect.length > 0) {
+        console.log('MCP服务器状态不同步，正在同步...');
         
+        // 断开不需要的服务器
+        for (const serverName of shouldDisconnect) {
+          try {
+            await apiService.disconnectMcpServer(serverName);
+            console.log(`已断开不需要的MCP服务器: ${serverName}`);
+          } catch (err) {
+            console.error(`断开MCP服务器 ${serverName} 失败:`, err);
+          }
+        }
+        // 连接需要的服务器
         for (const serverName of shouldConnect) {
           try {
-            // 重新连接MCP服务器
             await apiService.connectToMcpServer(serverName);
             console.log(`已重新连接MCP服务器: ${serverName}`);
           } catch (err) {

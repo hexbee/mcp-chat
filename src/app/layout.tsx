@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "智能助手",
+  title: "MCP-Chat",
   description: "基于大语言模型的高级工具增强智能助手",
 };
 

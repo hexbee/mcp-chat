@@ -63,15 +63,16 @@ class ApiService {
   }
 
   async sendMessage(messages: Message[]): Promise<Message> {
-    if (!this.isInitialized) {
-      // 如果未初始化，尝试再次初始化
+    if (!this.isInitialized || !this.anthropic) {
+      // 只有在未初始化时才尝试初始化
       this.initAnthropicClient();
+      
+      // 如果初始化后仍然没有anthropic客户端，则抛出错误
+      if (!this.anthropic) {
+        throw new Error("Anthropic API密钥未设置，无法连接到API");
+      }
     }
     
-    if (!this.anthropic) {
-      throw new Error("Anthropic API密钥未设置");
-    }
-
     // 转换消息格式为Anthropic API格式
     const anthropicMessages: MessageParam[] = messages.map(msg => {
       if (msg.content.length === 0 || (msg.content.length === 1 && msg.content[0].type === 'text')) {

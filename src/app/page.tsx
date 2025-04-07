@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import { Message, MessageContent } from '@/lib/api-service';
 import { McpTool } from '@/lib/mcp-manager';
@@ -10,20 +10,24 @@ import Settings from '@/components/Settings';
 import ApiKeySync from '@/components/ApiKeySync';
 import ChatHistory, { ChatSession } from '@/components/ChatHistory';
 import sessionService from '@/lib/session-service';
+import ServerSelector from '@/components/ServerSelector';
+import { Message as MessageType } from '@/lib/types';
+import { Session } from '@/lib/session-service';
 
 export default function Home() {
   const [messages, setMessages] = useState<Message[]>([]);
+  const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const [currentSessionId, setCurrentSessionId] = useState<string>('');
+  const [showHistory, setShowHistory] = useState(false);
   const [apiKey, setApiKey] = useState('');
   const [modelName, setModelName] = useState('claude-3-7-sonnet-latest');
-  const [baseUrl, setBaseUrl] = useState('');
+  const [baseUrl, setBaseUrl] = useState('https://api.anthropic.com');
   const [mcpConnected, setMcpConnected] = useState(false);
-  const [mcpTools, setMcpTools] = useState<McpTool[]>([]);
   const [connectedMcpServers, setConnectedMcpServers] = useState<string[]>([]);
-  const [showHistory, setShowHistory] = useState(false);
-  const [currentSessionId, setCurrentSessionId] = useState('');
-  const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const [mcpTools, setMcpTools] = useState<McpTool[]>([]);
 
   useEffect(() => {
     // 加载本地存储的设置
@@ -151,90 +155,107 @@ export default function Home() {
     syncSettingsToServer();
   }, []);
 
-  const handleSendMessage = async (content: string) => {
-    if (!content.trim()) return;
-
-    // 创建用户消息
-    const userMessage: Message = {
-      id: uuidv4(),
-      role: 'user',
-      content: [{ type: 'text', text: content }],
-      createdAt: new Date(),
+  // 添加beforeunload事件处理器
+  useEffect(() => {
+    const handleBeforeUnload = async (event: BeforeUnloadEvent) => {
+      // 断开所有服务器连接
+      for (const serverName of connectedMcpServers) {
+        try {
+          const response = await fetch('/api/mcp/disconnect', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ serverName }),
+            // 添加keepalive选项，确保请求在页面关闭时也能完成
+            keepalive: true
+          });
+          
+          if (!response.ok) {
+            console.error(`断开服务器 ${serverName} 失败:`, await response.text());
+          } else {
+            console.log(`已断开服务器连接: ${serverName}`);
+          }
+        } catch (err) {
+          console.error(`断开服务器 ${serverName} 失败:`, err);
+        }
+      }
     };
 
-    // 更新消息列表
-    const updatedMessages = [...messages, userMessage];
-    setMessages(updatedMessages);
-    setError(null);
-    
-    // 保存到当前会话
-    sessionService.addMessage(currentSessionId, userMessage);
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [connectedMcpServers]);
 
-    // 显示加载状态
-    setIsLoading(true);
-    
-    // 确保当前MCP连接状态也在服务端是同步的
-    if (mcpConnected && connectedMcpServers.length > 0) {
-      try {
-        // 获取MCP配置
-        const mcpConfig = localStorage.getItem('mcp_config');
-        
-        // 同步MCP连接状态到服务端 - 尝试连接所有保存的服务器
-        for (const serverName of connectedMcpServers) {
-          try {
-            await fetch('/api/mcp/connect', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify({ 
-                serverName,
-                mcpConfig  // 传递MCP配置
-              }),
-            });
-          } catch (syncErr) {
-            console.warn(`同步MCP服务器 ${serverName} 连接状态失败:`, syncErr);
-          }
-        }
-      } catch (err) {
-        console.error('同步MCP连接状态出错:', err);
-      }
-    }
-
+  const handleSendMessage = async (content: string) => {
     try {
-      // 发送API请求
+      // 清除错误
+      setError(null);
+      
+      // 设置加载状态
+      setIsLoading(true);
+      
+      // 创建新的用户消息
+      const userMessage: Message = {
+        id: Date.now().toString(),
+        role: 'user',
+        content: [{ type: 'text', text: content }],
+        createdAt: new Date(),
+      };
+      
+      // 添加到消息列表
+      const newMessages = [...messages, userMessage];
+      setMessages(newMessages);
+      
+      // 保存到会话存储
+      sessionService.addMessage(currentSessionId, userMessage);
+      
+      // 获取MCP配置以便在请求中传递
+      const mcpConfig = localStorage.getItem('mcp_config');
+      
+      // 准备请求数据
+      const requestData = {
+        messages: newMessages,
+        mcpState: mcpConnected ? {
+          connected: mcpConnected,
+          connectedServers: connectedMcpServers,
+          mcpConfig // 添加MCP配置
+        } : undefined
+      };
+      
+      // 发送请求到API
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          messages: updatedMessages,
-          mcpState: {
-            connected: mcpConnected,
-            connectedServers: connectedMcpServers
-          }
-        }),
+        body: JSON.stringify(requestData),
       });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || '请求失败');
-      }
-
-      // 添加助手回复到消息列表
-      setMessages((prev) => [...prev, data.response]);
       
-      // 保存助手回复到当前会话
-      sessionService.addMessage(currentSessionId!, data.response);
+      // 处理响应
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || '无法获取回复');
+      }
+      
+      // 解析响应
+      const data = await response.json();
+      
+      // 将AI响应添加到消息列表
+      const updatedMessages = [...newMessages, data.response];
+      setMessages(updatedMessages);
+      
+      // 保存到会话存储
+      sessionService.addMessage(currentSessionId, data.response);
       
       // 更新会话列表（可能有标题变更）
       setSessions(sessionService.getSessions());
-    } catch (err: any) {
-      console.error('发送消息失败:', err);
-      setError(err.message || '发送消息失败');
+    } catch (error: any) {
+      console.error('发送消息出错:', error);
+      setError(`请求失败: ${error.message || '未知错误'}`);
     } finally {
+      // 清除加载状态
       setIsLoading(false);
     }
   };
@@ -343,7 +364,7 @@ export default function Home() {
           // 显示重试信息给用户
           setError(`连接失败，正在重试... (${retryCount}/${maxRetries})`);
           // 重试前等待一段时间
-          await new Promise(r => setTimeout(r, 1500));
+          await new Promise(r => setTimeout(r, 3000));
         }
         
         const response = await fetch('/api/mcp/connect', {
@@ -553,7 +574,7 @@ export default function Home() {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16m-7 6h7" />
               </svg>
             </button>
-            <h1 className="text-xl font-bold text-blue-700 truncate">智能助手</h1>
+            <h1 className="text-xl font-bold text-blue-700 truncate">MCP-Chat</h1>
           </div>
           <div className="flex items-center space-x-3 flex-shrink-0">
             <Settings 
@@ -575,25 +596,15 @@ export default function Home() {
         <div className="flex-grow overflow-y-auto p-4 space-y-4 w-full">
           {messages.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full">
-              <p className="text-2xl mb-4 font-bold text-blue-700">欢迎使用智能助手</p>
+              <p className="text-2xl mb-4 font-bold text-blue-700">欢迎使用智能助手MCP-Chat</p>
               <div className="bg-blue-50 p-6 rounded-lg border border-blue-200 shadow-sm max-w-md">
                 <ol className="list-decimal list-inside text-base space-y-3 text-gray-900">
                   <li className="font-medium">点击右上角按钮，配置模型和API密钥</li>
-                  <li className="font-medium">连接MCP服务器以启用工具调用增强功能</li>
+                  <li className="font-medium">点击右上角按钮，配置MCP服务器</li>
                   <li className="font-medium">直接在输入框中输入您的问题或指令开始对话</li>
                 </ol>
               </div>
-              
-              {/* 新对话按钮 */}
-              <button
-                onClick={handleNewSession}
-                className="mt-6 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium flex items-center"
-              >
-                <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-                </svg>
-                开始新对话
-              </button>
+
             </div>
           ) : (
             messages.map((message) => (
@@ -620,7 +631,9 @@ export default function Home() {
           )}
         </div>
 
-        <ChatInput onSendMessage={handleSendMessage} loading={isLoading} />
+        <div className="border-t border-gray-200 bg-white">
+          <ChatInput onSendMessage={handleSendMessage} loading={isLoading} />
+        </div>
       </div>
     </div>
   );

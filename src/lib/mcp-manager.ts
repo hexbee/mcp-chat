@@ -56,6 +56,11 @@ class McpManager {
 
   // 设置配置
   setConfig(config: McpServerConfig): void {
+    // 检查是否与当前配置相同
+    if (this.config && JSON.stringify(this.config) === JSON.stringify(config)) {
+      console.log('MCP配置未变化，跳过设置');
+      return;
+    }
     this.config = config;
     console.log('已设置MCP配置');
   }
@@ -115,8 +120,8 @@ class McpManager {
     for (let attempt = 0; attempt <= retryCount; attempt++) {
       if (attempt > 0) {
         console.log(`MCP服务器 ${serverName} 连接重试 (${attempt}/${retryCount})...`);
-        // 在重试前等待一小段时间
-        await new Promise(r => setTimeout(r, 1000));
+        // 增加重试等待时间到3秒
+        await new Promise(r => setTimeout(r, 3000));
       }
       
       try {
@@ -170,6 +175,8 @@ class McpManager {
             try {
               client.connect(transport!);
               console.log(`成功连接到MCP服务器 ${serverName}`);
+              // 添加初始化等待时间
+              await new Promise(r => setTimeout(r, 2000));
             } catch (connectError: any) {
               // 特别处理"Connection closed"错误
               if (connectError.message && connectError.message.includes("Connection closed")) {
