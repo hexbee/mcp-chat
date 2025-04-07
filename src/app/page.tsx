@@ -10,9 +10,6 @@ import Settings from '@/components/Settings';
 import ApiKeySync from '@/components/ApiKeySync';
 import ChatHistory, { ChatSession } from '@/components/ChatHistory';
 import sessionService from '@/lib/session-service';
-import ServerSelector from '@/components/ServerSelector';
-import { Message as MessageType } from '@/lib/types';
-import { Session } from '@/lib/session-service';
 
 export default function Home() {
   const [messages, setMessages] = useState<Message[]>([]);
